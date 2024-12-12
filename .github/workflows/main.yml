@@ -5,13 +5,41 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 9999
     steps:
-    - name: Download CloudFlare Tunnel
-      run: |
-        Invoke-WebRequest https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe -OutFile cloudflared.exe
-    - name: Enable TS
-      run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
-    - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
-    - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
-    - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "@cyb3rking" -Force)
-    - name: Create Tunnel
-      run: Start-Process -FilePath .\cloudflared.exe -ArgumentList "tunnel", "--no-autoupdate", "tcp://localhost:3389"
+      - name: Download and Install OpenVPN
+        uses: actions/setup-openvpn@v1
+        with:
+          archive-downloads: true
+      - name: Generate Random Address and Port
+        run: |
+          python -c "import random; print(f'{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}.{random.randint(0, 255)}:{random.randint(1024, 65535)}')" > address_port.txt
+      - name: Configure OpenVPN
+        run: |
+          # Read generated address and port
+          set /p address_port=<address_port.txt
+
+          # Create an OpenVPN configuration file (e.g., config.ovpn)
+          echo "client" >> config.ovpn
+          echo "remote %address_port%" >> config.ovpn 
+          echo "proto udp" >> config.ovpn 
+          echo "resolv-retry infinite" >> config.ovpn 
+          # Add any other necessary options (e.g., username, password, cipher)
+
+      - name: Start OpenVPN
+        run: openvpn --config config.ovpn
+
+      - name: Enable TS
+        run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server'-name "fDenyTSConnections" -Value 0
+      - run: Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+      - run: Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -name "UserAuthentication" -Value 1
+      - run: Set-LocalUser -Name "runneradmin" -Password (ConvertTo-SecureString -AsPlainText "@cyb3rking" -Force)
+
+      - name: Keep OpenVPN Running
+        run: |
+          while true; do
+            # Check if OpenVPN is running
+            if ! (Get-WmiObject Win32_Service | Where-Object {$_.Name -eq "openvpn-service"} | Select-Object -ExpandProperty Status) -eq "Running" {
+              # Restart OpenVPN if it's not running
+              openvpn --config config.ovpn
+            }
+            Start-Sleep -Seconds 60 
+          done
